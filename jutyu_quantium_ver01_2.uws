@@ -1,0 +1,1224 @@
+DIM shipMeth[1]
+DIM phone_ebay[3]
+
+StopForm(false)
+
+//////////////////////////////////////////
+// jutyu_quantium.iniファイルのチェック //
+//////////////////////////////////////////
+//ifb !FOpen(".\jutyu_quantium.ini", F_EXISTS) then
+//	MsgBox("jutyu_quantium.iniファイルが存在しない可能性があります。iniファイルをご確認の上再度ツールを起動して下さい")
+//	exitexit
+//endif
+
+ifb !FOpen(".\" + PARAM_STR[0] + ".ini", F_EXISTS) then
+	MsgBox(PARAM_STR[0] + ".iniが存在しない可能性があります。iniファイルをご確認の上再度ツールを起動して下さい")
+	exitexit
+endif
+
+email = ReadIni("Quantium Account", "Mail", ".\" + PARAM_STR[0] + ".ini")
+ifb email = "" then
+	MsgBox("[Quantium Account]Mailが指定されていない可能性があります。iniファイルをご確認の上再度ツールを起動して下さい")
+	exitexit
+endif
+
+password = ReadIni("Quantium Account", "Password", ".\" + PARAM_STR[0] + ".ini")
+ifb password = "" then
+	MsgBox("[Quantium Account]Passwordが指定されていない可能性があります。iniファイルをご確認の上再度ツールを起動して下さい")
+	exitexit
+endif
+
+language = ReadIni("Quantium Account", "Language", ".\" + PARAM_STR[0] + ".ini")
+ifb language <> "0" and language <> "1" then
+	MsgBox("[Quantium Account]Languageに0／1以外の値が指定されている可能性があります。iniファイルをご確認の上再度ツールを起動して下さい")
+	exitexit
+endif
+
+shipMeth[0] = ReadIni("Shipping Method", "EMS", ".\" + PARAM_STR[0] + ".ini")
+ifb shipMeth[0] <> "0" and shipMeth[0] <> "1" then
+	MsgBox("[Shipping Method]EMSに0／1以外の値が指定されている可能性があります。iniファイルをご確認の上再度ツールを起動して下さい")
+	exitexit
+endif
+
+shipMeth[1] = ReadIni("Shipping Method", "国際eパケット", ".\" + PARAM_STR[0] + ".ini")
+ifb shipMeth[1] <> "0" and shipMeth[1] <> "1" then
+	MsgBox("[Shipping Method]国際eパケットに0／1以外の値が指定されている可能性があります。iniファイルをご確認の上再度ツールを起動して下さい")
+	exitexit
+endif
+
+cnt = 0
+for i = 0 to 1
+	if shipMeth[i] = "1" then cnt = cnt + 1
+next
+ifb cnt = 0 then
+	MsgBox("[Shipping Method]項目に1がどれにも指定されていない可能性があります。iniファイルをご確認の上再度ツールを起動して下さい")
+	exitexit
+elseif cnt > 1 then
+	MsgBox("[Shipping Method]項目に1が複数指定されている可能性があります。iniファイルをご確認の上再度ツールを起動して下さい")
+	exitexit
+endif
+
+////////////////////////////////////////////////////////
+// eBay:View Sales Recordページが開いているかチェック //
+////////////////////////////////////////////////////////
+tm = GetTime()
+while true
+	Sleep(0.5)
+	ifb GetTime() - tm > 45 then
+		MsgBox("IEの読み込みに異常が発生しました。恐れ入りますが再度ツールを起動して下さい")
+		exitexit
+	endif
+	COM_ERR_IGN
+	IE01 = GetActiveOleObj("InternetExplorer.Application", "ebay")
+	COM_ERR_RET
+	if COM_ERR_FLG then
+		MsgBox("IEが開いていない可能性があります。恐れ入りますが再度ツールを起動して下さい")
+		exitexit
+	endif
+	BusyWait(IE01)
+	ifb IE01.LocationURL = "" or IE01.LocationURL = NULL then
+		continue
+	else
+		break
+	endif
+wend
+
+ifb Pos("EditSalesRecord", IE01.LocationURL) = 0 then  // URLに「EditSalesRecord」という文字が含まれているかで判断
+	MsgBox("View Sales Recordページが開いていない可能性があります。ご確認の上再度ツールを起動して下さい")
+	exitexit
+endif
+
+Balloon("Scraping処理中です"); Sleep(1.0)
+
+////////////////////////////////////
+// Quantium（楽々システム）を開く //
+////////////////////////////////////
+IE02 = CreateOleObj("InternetExplorer.Application")
+IE02.Visible = True
+IE02.Navigate("https://effectqsjp.sakura.ne.jp/merchant/login/index/ja")
+BusyWait(IE02)
+
+//select	name(lang)
+//option	English-英語
+//option	Japanese-日本語
+// 表示言語
+ifb language = "0" then
+	IE02.document.getElementById("lang").options[1].selected = true
+else
+	IE02.document.getElementById("lang").options[0].selected = true
+endif
+
+elm = IE02.document.getElementById("lang")  // IE11用fireEvent
+evt = IE02.document.createEvent("HTMLEvents")
+evt.initEvent("change", true, false)
+elm.dispatchEvent(evt)
+BusyWait(IE02)
+
+//input	name(email)
+// メールアドレス
+while true
+	if IESetData(IE02, email, "email") then break
+	Sleep(0.5)
+wend
+
+//input	name(password)
+// パスワード
+while true
+	if IESetData(IE02, password, "password") then break
+	Sleep(0.5)
+wend
+
+//td	id(submit_td_ja)
+//td	id(submit_td)
+//button	type(submit)
+// ログインボタン
+ifb language = "0" then
+	IE02.document.getElementById("submit_td_ja").getElementsByTagName("button").item(0).click()
+else
+	IE02.document.getElementById("submit_td").getElementsByTagName("button").item(0).click()
+endif
+BusyWait(IE02)
+
+IE02.Navigate("https://effectqsjp.sakura.ne.jp/merchant/order/add")  // 新規出荷指示 入力画面に遷移
+BusyWait(IE02)
+
+//////////////////
+// Scraping処理 //
+//////////////////
+tm = GetTime()
+while true
+	if IESetData(IE02, true, "flight_type", "2") then break	// 発送情報（「国際郵便(日本郵便)」を選択）
+	Sleep(1.5)
+	ifb GetTime() - tm > 45 then
+		MsgBox("Scraping処理に異常が発生しました。恐れ入りますが再度ツールを起動して下さい")
+		exitexit
+	endif
+wend
+BusyWait(IE02)
+
+tm = GetTime()
+while true
+	ifb shipMeth[0] = "1" then	// 発送種別（「EMS(物品)」か「国際eパケット」を選択）
+		if IESetData(IE02, true, "jppost_send_type", "1") then break
+	else
+		if IESetData(IE02, true, "jppost_send_type", "4") then break
+	endif
+	Sleep(1.5)
+	ifb GetTime() - tm > 45 then
+		MsgBox("Scraping処理に異常が発生しました。恐れ入りますが再度ツールを起動して下さい")
+		exitexit
+	endif
+wend
+
+tm = GetTime()
+while true
+	if IESetData(IE02, true, "jppost_emergency_agree") then break	// 危険物についてのご確認（「上記内容品は危険物に該当しないことを確認済みです。」を選択）
+	Sleep(1.5)
+	ifb GetTime() - tm > 45 then
+		MsgBox("Scraping処理に異常が発生しました。恐れ入りますが再度ツールを起動して下さい")
+		exitexit
+	endif
+wend
+
+with IE01.document
+	if .getElementById("buyercontactname").value = "" then MsgBox("Warning!<#CR>Buyer Full Nameが空欄です")
+	tm = GetTime()
+	while true
+		if IESetData(IE02, .getElementById("buyercontactname").value, "to_full_name") then break	// 名前
+		Sleep(1.5)
+		ifb GetTime() - tm > 45 then
+			MsgBox("Scraping処理に異常が発生しました。恐れ入りますが再度ツールを起動して下さい")
+			exitexit
+		endif
+	wend
+
+	if .getElementById("buyeraddress1").value = "" then MsgBox("Warning!<#CR>Streetが空欄です")
+	tm = GetTime()
+	while true
+		if IESetData(IE02, .getElementById("buyeraddress1").value, "to_address_1") then break	// 住所1
+		Sleep(1.5)
+		ifb GetTime() - tm > 45 then
+			MsgBox("Scraping処理に異常が発生しました。恐れ入りますが再度ツールを起動して下さい")
+			exitexit
+		endif
+	wend
+
+	tm = GetTime()
+	while true
+		if IESetData(IE02, .getElementById("buyeraddress2").value, "to_address_2") then break	// 住所2
+		Sleep(1.5)
+		ifb GetTime() - tm > 45 then
+			MsgBox("Scraping処理に異常が発生しました。恐れ入りますが再度ツールを起動して下さい")
+			exitexit
+		endif
+	wend
+
+	if .getElementById("buyercity").value = "" then MsgBox("Warning!<#CR>Cityが空欄です")
+	tm = GetTime()
+	while true
+		if IESetData(IE02, .getElementById("buyercity").value, "to_city") then break	// 市町村名
+		Sleep(1.5)
+		ifb GetTime() - tm > 45 then
+			MsgBox("Scraping処理に異常が発生しました。恐れ入りますが再度ツールを起動して下さい")
+			exitexit
+		endif
+	wend
+
+	//if .getElementById("buyerstateprovince").value = "" then MsgBox("Warning!<#CR>State / Provinceが空欄です")
+	tm = GetTime()
+	while true
+		if IESetData(IE02, .getElementById("buyerstateprovince").value, "to_state") then break	// 州・県
+		Sleep(1.5)
+		ifb GetTime() - tm > 45 then
+			MsgBox("Scraping処理に異常が発生しました。恐れ入りますが再度ツールを起動して下さい")
+			exitexit
+		endif
+	wend
+
+	tm = GetTime()
+	while true
+		if IESetData(IE02, .getElementById("buyerzip").value, "to_postalcode") then break	// 郵便番号
+		Sleep(1.5)
+		ifb GetTime() - tm > 45 then
+			MsgBox("Scraping処理に異常が発生しました。恐れ入りますが再度ツールを起動して下さい")
+			exitexit
+		endif
+	wend
+
+	with .getElementById("buyercountry")  // 国
+		ifb language = "0" then
+			ifb CountryConvert(.options[.selectedIndex].text) = 99999 then
+				MsgBox("Warning!<#CR>国名 " + .options[.selectedIndex].text + " に該当する選択肢がありません")
+			else
+				IE02.document.getElementsByName("to_country").item[0].selectedIndex = CountryConvert(.options[.selectedIndex].text)
+			endif
+		else
+			ifb CountryConvert_e(.options[.selectedIndex].text) = 99999 then
+			else
+				IE02.document.getElementsByName("to_country").item[0].selectedIndex = CountryConvert_e(.options[.selectedIndex].text)
+			endif
+		endif
+	endWith
+
+	SetClear(phone_ebay, "")
+	phone_ebay[0] = .getElementById("dayphone1").value	// 電話番号
+	COM_ERR_IGN
+		phone_ebay[1] = .getElementById("dayphone2").value
+	COM_ERR_RET
+	if phone_ebay[1] = -999999 then phone_ebay[1] = ""
+	COM_ERR_IGN
+		phone_ebay[2] = .getElementById("dayphone3").value
+	COM_ERR_RET
+	if phone_ebay[2] = -999999 then phone_ebay[2] = ""
+	COM_ERR_IGN
+		phone_ebay[3] = .getElementById("dayphone4").value
+	COM_ERR_RET
+	if phone_ebay[3] = -999999 then phone_ebay[3] = ""
+
+	phone_quantium = ""
+	j = 1
+	for i = 0 to 3
+		if phone_ebay[i] = "" then continue
+		ifb j = 1 then
+			phone_quantium = phone_ebay[i]
+		else
+			phone_quantium = phone_quantium + "-" + phone_ebay[i]
+		endif
+		j = j + 1
+	next
+
+	if phone_quantium = "" then MsgBox("Warning!<#CR>Phone Numberが空欄です")
+	tm = GetTime()
+	while true
+		if IESetData(IE02, phone_quantium, "to_tel") then break
+		Sleep(1.5)
+		ifb GetTime() - tm > 45 then
+			MsgBox("Scraping処理に異常が発生しました。恐れ入りますが再度ツールを起動して下さい")
+			exitexit
+		endif
+	wend
+
+	tm = GetTime()
+	while true
+		if IESetData(IE02, "1", "order_count[]") then break  // 数量欄
+		Sleep(1.5)
+		ifb GetTime() - tm > 45 then
+			MsgBox("Scraping処理に異常が発生しました。恐れ入りますが再度ツールを起動して下さい")
+			exitexit
+		endif
+	wend
+endWith
+
+Balloon("Scraping処理が完了しました")
+Sleep(1.3)
+Balloon()
+
+
+
+
+
+
+
+
+
+
+Procedure BusyWait(ie)
+	Const TIME_OUT = 30
+	tm = GetTime()
+	repeat
+		sleep(0.2)
+		ifb GetTime() - tm > TIME_OUT
+			exit
+		endif
+	until (! ie.busy) and (ie.readyState=4)
+Fend
+
+Function CountryConvert(country)
+	select country
+		case "United States"
+			c_code = 6
+		case "Canada"
+			c_code = 42
+		case "United Kingdom"
+			c_code = 17
+		case "Afghanistan"
+			c_code = 5
+		case "Albania"
+			c_code = 11
+		case "Algeria"
+			c_code = 8
+		case "American Samoa"
+			c_code = 225
+		case "Andorra"
+			c_code = 99999
+		case "Angola"
+			c_code = 14
+		case "Anguilla"
+			c_code = 13
+		case "Antigua and Barbuda"
+			c_code = 15
+		case "Argentina"
+			c_code = 9
+		case "Armenia"
+			c_code = 12
+		case "Aruba"
+			c_code = 10
+		case "Australia"
+			c_code = 38
+		case "Austria"
+			c_code = 39
+		case "Azerbaijan Republic"
+			c_code = 4
+		case "Bahamas"
+			c_code = 140
+		case "Bahrain"
+			c_code = 144
+		case "Bangladesh"
+			c_code = 142
+		case "Barbados"
+			c_code = 141
+		case "Belarus"
+			c_code = 167
+		case "Belgium"
+			c_code = 169
+		case "Belize"
+			c_code = 168
+		case "Benin"
+			c_code = 165
+		case "Bermuda"
+			c_code = 143
+		case "Bhutan"
+			c_code = 162
+		case "Bolivia"
+			c_code = 174
+		case "Bosnia and Herzegovina"
+			c_code = 172
+		case "Botswana"
+			c_code = 173
+		case "Brazil"
+			c_code = 157
+		case "British Virgin Islands"
+			c_code = 227
+		case "Brunei Darussalam"
+			c_code = 160
+		case "Bulgaria"
+			c_code = 158
+		case "Burkina Faso"
+			c_code = 159
+		case "Burundi"
+			c_code = 161
+		case "Cambodia"
+			c_code = 44
+		case "Cameroon"
+			c_code = 43
+		case "Cape Verde Islands"
+			c_code = 45
+		case "Cayman Islands"
+			c_code = 66
+		case "Central African Republic"
+			c_code = 216
+		case "Chad"
+			c_code = 112
+		case "Chile"
+			c_code = 114
+		case "China"
+			c_code = 215
+		case "Colombia"
+			c_code = 71
+		case "Comoros"
+			c_code = 70
+		case "Congo, Democratic Republic of the"
+			c_code = 73
+		case "Congo, Republic of the"
+			c_code = 72
+		case "Cook Islands"
+			c_code = 59
+		case "Costa Rica"
+			c_code = 68
+		case "Cote d Ivoire (Ivory Coast)"
+			c_code = 74
+		case "Croatia, Republic of"
+			c_code = 60
+		case "Cyprus"
+			c_code = 51
+		case "Czech Republic"
+			c_code = 111
+		case "Denmark"
+			c_code = 116
+		case "Djibouti"
+			c_code = 85
+		case "Dominica"
+			c_code = 124
+		case "Dominican Republic"
+			c_code = 125
+		case "Ecuador"
+			c_code = 29
+		case "Egypt"
+			c_code = 30
+		case "El Salvador"
+			c_code = 34
+		case "Equatorial Guinea"
+			c_code = 228
+		case "Eritrea"
+			c_code = 33
+		case "Estonia"
+			c_code = 31
+		case "Ethiopia"
+			c_code = 32
+		case "Falkland Islands (Islas Malvinas)"
+			c_code = 155
+		case "Fiji"
+			c_code = 151
+		case "Finland"
+			c_code = 153
+		case "France"
+			c_code = 156
+		case "French Guiana"
+			c_code = 217
+		case "French Polynesia"
+			c_code = 218
+		case "Gabon Republic"
+			c_code = 48
+		case "Gambia"
+			c_code = 49
+		case "Georgia"
+			c_code = 99999
+		case "Germany"
+			c_code = 123
+		case "Ghana"
+			c_code = 50
+		case "Gibraltar"
+			c_code = 86
+		case "Greece"
+			c_code = 57
+		case "Greenland"
+			c_code = 63
+		case "Grenada"
+			c_code = 65
+		case "Guadeloupe"
+			c_code = 47
+		case "Guam"
+			c_code = 62
+		case "Guatemala"
+			c_code = 61
+		case "Guernsey"
+			c_code = 99999
+		case "Guinea"
+			c_code = 55
+		case "Guinea-Bissau"
+			c_code = 56
+		case "Guyana"
+			c_code = 46
+		case "Haiti"
+			c_code = 136
+		case "Honduras"
+			c_code = 171
+		case "Hong Kong"
+			c_code = 230
+		case "Hungary"
+			c_code = 137
+		case "Iceland"
+			c_code = 1
+		case "India"
+			c_code = 22
+		case "Indonesia"
+			c_code = 23
+		case "Ireland"
+			c_code = 2
+		case "Israel"
+			c_code = 18
+		case "Italy"
+			c_code = 19
+		case "Jamaica"
+			c_code = 87
+		case "Jan Mayen"
+			c_code = 99999
+		case "Japan"
+			c_code = 223
+		case "Jersey"
+			c_code = 99999
+		case "Jordan"
+			c_code = 200
+		case "Kazakhstan"
+			c_code = 40
+		case "Kenya"
+			c_code = 67
+		case "Kiribati"
+			c_code = 53
+		case "Korea, South"
+			c_code = 229
+		case "Kuwait"
+			c_code = 58
+		case "Kyrgyzstan"
+			c_code = 54
+		case "Laos"
+			c_code = 201
+		case "Latvia"
+			c_code = 202
+		case "Lebanon"
+			c_code = 211
+		case "Liechtenstein"
+			c_code = 204
+		case "Lithuania"
+			c_code = 203
+		case "Luxembourg"
+			c_code = 207
+		case "Macau"
+			c_code = 177
+		case "Macedonia"
+			c_code = 178
+		case "Madagascar"
+			c_code = 179
+		case "Malawi"
+			c_code = 180
+		case "Malaysia"
+			c_code = 184
+		case "Maldives"
+			c_code = 192
+		case "Mali"
+			c_code = 181
+		case "Malta"
+			c_code = 182
+		case "Marshall Islands"
+			c_code = 185
+		case "Martinique"
+			c_code = 183
+		case "Mauritania"
+			c_code = 199
+		case "Mauritius"
+			c_code = 198
+		case "Mayotte"
+			c_code = 99999
+		case "Mexico"
+			c_code = 189
+		case "Moldova"
+			c_code = 193
+		case "Monaco"
+			c_code = 191
+		case "Mongolia"
+			c_code = 195
+		case "Montserrat"
+			c_code = 197
+		case "Morocco"
+			c_code = 194
+		case "Mozambique"
+			c_code = 190
+		case "Namibia"
+			c_code = 128
+		case "Nauru"
+			c_code = 127
+		case "Nepal"
+			c_code = 134
+		case "Netherlands"
+			c_code = 36
+		case "Netherlands Antilles"
+			c_code = 37
+		case "New Caledonia"
+			c_code = 133
+		case "New Zealand"
+			c_code = 132
+		case "Nicaragua"
+			c_code = 130
+		case "Niger"
+			c_code = 131
+		case "Nigeria"
+			c_code = 126
+		case "Niue"
+			c_code = 129
+		case "Norway"
+			c_code = 135
+		case "Oman"
+			c_code = 35
+		case "Pakistan"
+			c_code = 145
+		case "Palau"
+			c_code = 148
+		case "Panama"
+			c_code = 146
+		case "Papua New Guinea"
+			c_code = 147
+		case "Paraguay"
+			c_code = 149
+		case "Peru"
+			c_code = 170
+		case "Philippines"
+			c_code = 152
+		case "Poland"
+			c_code = 176
+		case "Portugal"
+			c_code = 175
+		case "Puerto Rico"
+			c_code = 163
+		case "Qatar"
+			c_code = 41
+		case "Romania"
+			c_code = 209
+		case "Russian Federation"
+			c_code = 213
+		case "Rwanda"
+			c_code = 208
+		case "Saint Helena"
+			c_code = 103
+		case "Saint Kitts-Nevis"
+			c_code = 100
+		case "Saint Lucia"
+			c_code = 102
+		case "Saint Pierre and Miquelon"
+			c_code = 80
+		case "Saint Vincent and the Grenadines"
+			c_code = 101
+		case "San Marino"
+			c_code = 79
+		case "Saudi Arabia"
+			c_code = 76
+		case "Senegal"
+			c_code = 98
+		case "Seychelles"
+			c_code = 104
+		case "Sierra Leone"
+			c_code = 82
+		case "Singapore"
+			c_code = 84
+		case "Slovakia"
+			c_code = 94
+		case "Slovenia"
+			c_code = 95
+		case "Solomon Islands"
+			c_code = 106
+		case "Somalia"
+			c_code = 105
+		case "South Africa"
+			c_code = 221
+		case "Spain"
+			c_code = 91
+		case "Sri Lanka"
+			c_code = 93
+		case "Suriname"
+			c_code = 92
+		case "Svalbard"
+			c_code = 99999
+		case "Swaziland"
+			c_code = 96
+		case "Sweden"
+			c_code = 90
+		case "Switzerland"
+			c_code = 89
+		case "Tahiti"
+			c_code = 99999
+		case "Taiwan"
+			c_code = 222
+		case "Tajikistan"
+			c_code = 108
+		case "Tanzania"
+			c_code = 109
+		case "Thailand"
+			c_code = 107
+		case "Togo"
+			c_code = 122
+		case "Tonga"
+			c_code = 121
+		case "Trinidad and Tobago"
+			c_code = 118
+		case "Tunisia"
+			c_code = 113
+		case "Turkey"
+			c_code = 120
+		case "Turkmenistan"
+			c_code = 119
+		case "Turks and Caicos Islands"
+			c_code = 110
+		case "Tuvalu"
+			c_code = 115
+		case "Uganda"
+			c_code = 25
+		case "Ukraine"
+			c_code = 26
+		case "United Arab Emirates"
+			c_code = 7
+		case "Uruguay"
+			c_code = 28
+		case "Uzbekistan"
+			c_code = 27
+		case "Vanuatu"
+			c_code = 139
+		case "Vatican City State"
+			c_code = 138
+		case "Venezuela"
+			c_code = 166
+		case "Vietnam"
+			c_code = 164
+		case "Virgin Islands (U.S.)"
+			c_code = 226
+		case "Wallis and Futuna"
+			c_code = 214
+		case "Western Sahara"
+			c_code = 99999
+		case "Western Samoa"
+			c_code = 77
+		case "Yemen"
+			c_code = 16
+		case "Zambia"
+			c_code = 81
+		case "Zimbabwe"
+			c_code = 88
+		case "APO/FPO/DPO"
+			c_code = 99999
+		case "Micronesia"
+			c_code = 186
+		case "Reunion"
+			c_code = 212
+		case "Montenegro"
+			c_code = 196
+		case "Serbia"
+			c_code = 99
+	selend
+	result = c_code
+Fend
+
+Function CountryConvert_e(country)
+	select country
+		case "United States"
+			c_code = 218
+		case "United States"
+			c_code = 218
+		case "Canada"
+			c_code = 36
+		case "Canada"
+			c_code = 36
+		case "United Kingdom"
+			c_code = 217
+		case "United Kingdom"
+			c_code = 217
+		case "Afghanistan"
+			c_code = 1
+		case "Albania"
+			c_code = 2
+		case "Algeria"
+			c_code = 3
+		case "American Samoa"
+			c_code = 4
+		case "Andorra"
+			c_code = 99999
+		case "Angola"
+			c_code = 5
+		case "Anguilla"
+			c_code = 6
+		case "Antigua and Barbuda"
+			c_code = 7
+		case "Argentina"
+			c_code = 8
+		case "Armenia"
+			c_code = 9
+		case "Aruba"
+			c_code = 10
+		case "Australia"
+			c_code = 12
+		case "Austria"
+			c_code = 13
+		case "Azerbaijan Republic"
+			c_code = 14
+		case "Bahamas"
+			c_code = 15
+		case "Bahrain"
+			c_code = 16
+		case "Bangladesh"
+			c_code = 17
+		case "Barbados"
+			c_code = 18
+		case "Belarus"
+			c_code = 19
+		case "Belgium"
+			c_code = 20
+		case "Belize"
+			c_code = 21
+		case "Benin"
+			c_code = 22
+		case "Bermuda"
+			c_code = 23
+		case "Bhutan"
+			c_code = 24
+		case "Bolivia"
+			c_code = 25
+		case "Bosnia and Herzegovina"
+			c_code = 26
+		case "Botswana"
+			c_code = 27
+		case "Brazil"
+			c_code = 28
+		case "British Virgin Islands"
+			c_code = 29
+		case "Brunei Darussalam"
+			c_code = 30
+		case "Bulgaria"
+			c_code = 31
+		case "Burkina Faso"
+			c_code = 32
+		case "Burundi"
+			c_code = 33
+		case "Cambodia"
+			c_code = 34
+		case "Cameroon"
+			c_code = 35
+		case "Cape Verde Islands"
+			c_code = 37
+		case "Cayman Islands"
+			c_code = 38
+		case "Central African Republic"
+			c_code = 39
+		case "Chad"
+			c_code = 40
+		case "Chile"
+			c_code = 41
+		case "China"
+			c_code = 42
+		case "Colombia"
+			c_code = 43
+		case "Comoros"
+			c_code = 44
+		case "Congo, Democratic Republic of the"
+			c_code = 54
+		case "Congo, Republic of the"
+			c_code = 45
+		case "Cook Islands"
+			c_code = 46
+		case "Costa Rica"
+			c_code = 47
+		case "Cote d Ivoire (Ivory Coast)"
+			c_code = 48
+		case "Croatia, Republic of"
+			c_code = 49
+		case "Cyprus"
+			c_code = 51
+		case "Czech Republic"
+			c_code = 52
+		case "Denmark"
+			c_code = 55
+		case "Djibouti"
+			c_code = 56
+		case "Dominica"
+			c_code = 57
+		case "Dominican Republic"
+			c_code = 58
+		case "Ecuador"
+			c_code = 60
+		case "Egypt"
+			c_code = 61
+		case "El Salvador"
+			c_code = 62
+		case "Equatorial Guinea"
+			c_code = 63
+		case "Eritrea"
+			c_code = 64
+		case "Estonia"
+			c_code = 65
+		case "Ethiopia"
+			c_code = 66
+		case "Falkland Islands (Islas Malvinas)"
+			c_code = 67
+		case "Fiji"
+			c_code = 69
+		case "Finland"
+			c_code = 70
+		case "France"
+			c_code = 71
+		case "French Guiana"
+			c_code = 72
+		case "French Polynesia"
+			c_code = 73
+		case "Gabon Republic"
+			c_code = 74
+		case "Gambia"
+			c_code = 75
+		case "Georgia"
+			c_code = 76
+		case "Germany"
+			c_code = 77
+		case "Ghana"
+			c_code = 78
+		case "Gibraltar"
+			c_code = 79
+		case "Greece"
+			c_code = 80
+		case "Greenland"
+			c_code = 81
+		case "Grenada"
+			c_code = 82
+		case "Guadeloupe"
+			c_code = 83
+		case "Guam"
+			c_code = 84
+		case "Guatemala"
+			c_code = 85
+		case "Guernsey"
+			c_code = 99999
+		case "Guinea"
+			c_code = 86
+		case "Guinea-Bissau"
+			c_code = 87
+		case "Guyana"
+			c_code = 88
+		case "Haiti"
+			c_code = 89
+		case "Honduras"
+			c_code = 90
+		case "Hong Kong"
+			c_code = 91
+		case "Hungary"
+			c_code = 92
+		case "Iceland"
+			c_code = 93
+		case "India"
+			c_code = 94
+		case "Indonesia"
+			c_code = 95
+		case "Ireland"
+			c_code = 98
+		case "Israel"
+			c_code = 99
+		case "Italy"
+			c_code = 100
+		case "Jamaica"
+			c_code = 101
+		case "Jan Mayen"
+			c_code = 99999
+		case "Japan"
+			c_code = 102
+		case "Jersey"
+			c_code = 99999
+		case "Jordan"
+			c_code = 103
+		case "Kazakhstan"
+			c_code = 104
+		case "Kenya"
+			c_code = 105
+		case "Kiribati"
+			c_code = 106
+		case "Korea, South"
+			c_code = 107
+		case "Kuwait"
+			c_code = 109
+		case "Kyrgyzstan"
+			c_code = 110
+		case "Laos"
+			c_code = 111
+		case "Latvia"
+			c_code = 112
+		case "Lebanon"
+			c_code = 113
+		case "Liechtenstein"
+			c_code = 117
+		case "Lithuania"
+			c_code = 118
+		case "Luxembourg"
+			c_code = 119
+		case "Macau"
+			c_code = 120
+		case "Macedonia"
+			c_code = 121
+		case "Madagascar"
+			c_code = 122
+		case "Malawi"
+			c_code = 123
+		case "Malaysia"
+			c_code = 124
+		case "Maldives"
+			c_code = 125
+		case "Mali"
+			c_code = 126
+		case "Malta"
+			c_code = 127
+		case "Marshall Islands"
+			c_code = 128
+		case "Martinique"
+			c_code = 129
+		case "Mauritania"
+			c_code = 130
+		case "Mauritius"
+			c_code = 131
+		case "Mayotte"
+			c_code = 99999
+		case "Mexico"
+			c_code = 132
+		case "Moldova"
+			c_code = 135
+		case "Monaco"
+			c_code = 136
+		case "Mongolia"
+			c_code = 137
+		case "Montserrat"
+			c_code = 139
+		case "Morocco"
+			c_code = 140
+		case "Mozambique"
+			c_code = 141
+		case "Namibia"
+			c_code = 143
+		case "Nauru"
+			c_code = 144
+		case "Nepal"
+			c_code = 145
+		case "Netherlands"
+			c_code = 146
+		case "Netherlands Antilles"
+			c_code = 147
+		case "New Caledonia"
+			c_code = 148
+		case "New Zealand"
+			c_code = 149
+		case "Nicaragua"
+			c_code = 150
+		case "Niger"
+			c_code = 151
+		case "Nigeria"
+			c_code = 152
+		case "Niue"
+			c_code = 153
+		case "Norway"
+			c_code = 155
+		case "Oman"
+			c_code = 156
+		case "Pakistan"
+			c_code = 157
+		case "Palau"
+			c_code = 158
+		case "Panama"
+			c_code = 159
+		case "Papua New Guinea"
+			c_code = 160
+		case "Paraguay"
+			c_code = 161
+		case "Peru"
+			c_code = 162
+		case "Philippines"
+			c_code = 163
+		case "Poland"
+			c_code = 165
+		case "Portugal"
+			c_code = 166
+		case "Puerto Rico"
+			c_code = 167
+		case "Qatar"
+			c_code = 168
+		case "Romania"
+			c_code = 170
+		case "Russian Federation"
+			c_code = 171
+		case "Rwanda"
+			c_code = 172
+		case "Saint Helena"
+			c_code = 193
+		case "Saint Kitts-Nevis"
+			c_code = 191
+		case "Saint Lucia"
+			c_code = 173
+		case "Saint Pierre and Miquelon"
+			c_code = 194
+		case "Saint Vincent and the Grenadines"
+			c_code = 192
+		case "San Marino"
+			c_code = 176
+		case "Saudi Arabia"
+			c_code = 178
+		case "Senegal"
+			c_code = 179
+		case "Seychelles"
+			c_code = 181
+		case "Sierra Leone"
+			c_code = 182
+		case "Singapore"
+			c_code = 183
+		case "Slovakia"
+			c_code = 184
+		case "Slovenia"
+			c_code = 185
+		case "Solomon Islands"
+			c_code = 186
+		case "Somalia"
+			c_code = 187
+		case "South Africa"
+			c_code = 188
+		case "Spain"
+			c_code = 189
+		case "Sri Lanka"
+			c_code = 190
+		case "Suriname"
+			c_code = 196
+		case "Svalbard"
+			c_code = 99999
+		case "Swaziland"
+			c_code = 197
+		case "Sweden"
+			c_code = 198
+		case "Switzerland"
+			c_code = 199
+		case "Tahiti"
+			c_code = 99999
+		case "Taiwan"
+			c_code = 201
+		case "Tajikistan"
+			c_code = 202
+		case "Tanzania"
+			c_code = 203
+		case "Thailand"
+			c_code = 204
+		case "Togo"
+			c_code = 205
+		case "Tonga"
+			c_code = 206
+		case "Trinidad and Tobago"
+			c_code = 207
+		case "Tunisia"
+			c_code = 209
+		case "Turkey"
+			c_code = 210
+		case "Turkmenistan"
+			c_code = 211
+		case "Turks and Caicos Islands"
+			c_code = 212
+		case "Tuvalu"
+			c_code = 213
+		case "Uganda"
+			c_code = 214
+		case "Ukraine"
+			c_code = 215
+		case "United Arab Emirates"
+			c_code = 216
+		case "Uruguay"
+			c_code = 219
+		case "Uzbekistan"
+			c_code = 221
+		case "Vanuatu"
+			c_code = 222
+		case "Vatican City State"
+			c_code = 223
+		case "Venezuela"
+			c_code = 224
+		case "Vietnam"
+			c_code = 225
+		case "Virgin Islands (U.S.)"
+			c_code = 220
+		case "Wallis and Futuna"
+			c_code = 227
+		case "Western Sahara"
+			c_code = 99999
+		case "Western Samoa"
+			c_code = 175
+		case "Yemen"
+			c_code = 228
+		case "Zambia"
+			c_code = 229
+		case "Zimbabwe"
+			c_code = 230
+		case "APO/FPO/DPO"
+			c_code = 99999
+		case "Micronesia"
+			c_code = 133
+		case "Reunion"
+			c_code = 169
+		case "Montenegro"
+			c_code = 138
+		case "Serbia"
+			c_code = 180
+	selend
+	result = c_code
+Fend
